@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Role, UserSession, AppState, DaySchedule } from './types';
-import { getSession, saveSession, clearSession, loadData, saveData, getNext7Days, getEmptySchedule } from './services/dataService';
+import { getSession, saveSession, clearSession, loadData, saveData, getUpcomingDays, getEmptySchedule, subscribeToChanges } from './services/dataService';
 import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseConfig } from './services/supabase';
 import { Button } from './components/Button';
 import { DayCard } from './components/DayCard';
 import { APP_NAME } from './constants';
-import { LogOut, Heart, Lock, CalendarHeart, Sparkles, X, Cloud, Settings, RefreshCw } from 'lucide-react';
+import { LogOut, Heart, Lock, CalendarHeart, Sparkles, X, Cloud, Settings, RefreshCw, Bell } from 'lucide-react';
 
 const App: React.FC = () => {
   const [session, setSession] = useState<UserSession | null>(null);
@@ -13,6 +13,7 @@ const App: React.FC = () => {
   const [surpriseMode, setSurpriseMode] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Login Form State
   const [inputKey, setInputKey] = useState('');
@@ -43,8 +44,27 @@ const App: React.FC = () => {
     init();
   }, []);
 
+  // Real-time subscription
+  useEffect(() => {
+    if (!session) return;
+
+    const unsubscribe = subscribeToChanges(session.coupleKey, (newData) => {
+      setAppData(newData);
+      // Only notify the planner (Boyfriend)
+      if (session.role === Role.BOYFRIEND) {
+        setToastMessage("Partner updated availability!");
+        // Clear toast after 3 seconds
+        setTimeout(() => setToastMessage(null), 3000);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [session]);
+
   const ensureUpcomingDays = async (currentData: AppState, key: string) => {
-    const days = getNext7Days();
+    const days = getUpcomingDays();
     let updated = false;
     const newSchedules = { ...currentData.schedules };
 
@@ -225,10 +245,20 @@ const App: React.FC = () => {
   }
 
   // --- DASHBOARD ---
-  const days = getNext7Days();
+  const days = getUpcomingDays();
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col safe-top">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 animate-[bounce_1s_infinite]">
+          <div className="bg-slate-900 text-white px-5 py-2.5 rounded-full shadow-xl flex items-center gap-3 text-sm font-medium border border-slate-700/50 backdrop-blur-sm">
+            <Bell className="w-4 h-4 text-pink-400 fill-pink-400 animate-pulse" />
+            {toastMessage}
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="sticky top-0 z-40 bg-white/90 backdrop-blur-md border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-2">

@@ -73,11 +73,38 @@ export const saveData = async (coupleKey: string, data: AppState) => {
   }
 };
 
-// Helper to generate next 7 days keys
-export const getNext7Days = (): string[] => {
+export const subscribeToChanges = (coupleKey: string, onUpdate: (newData: AppState) => void) => {
+  const supabase = getClient();
+  if (!supabase) return () => {};
+
+  const channel = supabase
+    .channel(`public:schedules:${coupleKey}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'schedules',
+        filter: `couple_key=eq.${coupleKey}`,
+      },
+      (payload) => {
+        if (payload.new && payload.new.data) {
+          onUpdate(payload.new.data as AppState);
+        }
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+};
+
+// Helper to generate next 18 days keys
+export const getUpcomingDays = (): string[] => {
   const days = [];
   const today = new Date();
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 18; i++) {
     const d = new Date(today);
     d.setDate(today.getDate() + i);
     days.push(d.toISOString().split('T')[0]);

@@ -1,34 +1,49 @@
 import React, { useState, useEffect } from 'react';
 import { Role, UserSession, AppState, DaySchedule } from './types';
 import { getSession, saveSession, clearSession, loadData, saveData, getNext7Days, getEmptySchedule } from './services/dataService';
+import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseConfig } from './services/supabase';
 import { Button } from './components/Button';
 import { DayCard } from './components/DayCard';
 import { APP_NAME } from './constants';
-import { LogOut, Heart, Lock, CalendarHeart, Sparkles, X } from 'lucide-react';
+import { LogOut, Heart, Lock, CalendarHeart, Sparkles, X, Cloud, Settings, RefreshCw } from 'lucide-react';
 
 const App: React.FC = () => {
   const [session, setSession] = useState<UserSession | null>(null);
   const [appData, setAppData] = useState<AppState>({ schedules: {} });
   const [surpriseMode, setSurpriseMode] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
 
   // Login Form State
   const [inputKey, setInputKey] = useState('');
   const [selectedRole, setSelectedRole] = useState<Role | null>(null);
 
-  // Load session on mount
+  // Config State
+  const [showConfig, setShowConfig] = useState(false);
+  const [sbUrl, setSbUrl] = useState('');
+  const [sbKey, setSbKey] = useState('');
+
+  // Load session and config on mount
   useEffect(() => {
-    const savedSession = getSession();
-    if (savedSession) {
-      setSession(savedSession);
-      const data = loadData(savedSession.coupleKey);
-      ensureUpcomingDays(data, savedSession.coupleKey);
-    } else {
-      setLoading(false);
+    const sbConfig = getSupabaseConfig();
+    if (sbConfig) {
+      setSbUrl(sbConfig.url);
+      setSbKey(sbConfig.key);
     }
+
+    const init = async () => {
+      const savedSession = getSession();
+      if (savedSession) {
+        setSession(savedSession);
+        const data = await loadData(savedSession.coupleKey);
+        await ensureUpcomingDays(data, savedSession.coupleKey);
+      }
+      setLoading(false);
+    };
+    init();
   }, []);
 
-  const ensureUpcomingDays = (currentData: AppState, key: string) => {
+  const ensureUpcomingDays = async (currentData: AppState, key: string) => {
     const days = getNext7Days();
     let updated = false;
     const newSchedules = { ...currentData.schedules };
@@ -43,22 +58,31 @@ const App: React.FC = () => {
     if (updated) {
       const newData = { schedules: newSchedules };
       setAppData(newData);
-      saveData(key, newData);
+      await saveData(key, newData);
     } else {
       setAppData(currentData);
     }
-    setLoading(false);
   };
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     if (!selectedRole || !inputKey.trim()) return;
+    setLoading(true);
+
+    // Save Config if provided
+    if (sbUrl && sbKey) {
+      saveSupabaseConfig({ url: sbUrl.trim(), key: sbKey.trim() });
+    } else {
+      clearSupabaseConfig();
+    }
+
     const newSession = { role: selectedRole, coupleKey: inputKey.trim() };
     saveSession(newSession.role, newSession.coupleKey);
     setSession(newSession);
     
-    // Load data for this key
-    const data = loadData(newSession.coupleKey);
-    ensureUpcomingDays(data, newSession.coupleKey);
+    // Load data
+    const data = await loadData(newSession.coupleKey);
+    await ensureUpcomingDays(data, newSession.coupleKey);
+    setLoading(false);
   };
 
   const handleLogout = () => {
@@ -70,8 +94,11 @@ const App: React.FC = () => {
     setSurpriseMode(false);
   };
 
-  const handleUpdateDay = (updatedDay: DaySchedule) => {
+  const handleUpdateDay = async (updatedDay: DaySchedule) => {
     if (!session) return;
+    setSyncing(true);
+    
+    // Optimistic Update
     const newData = {
       schedules: {
         ...appData.schedules,
@@ -79,8 +106,19 @@ const App: React.FC = () => {
       },
     };
     setAppData(newData);
-    saveData(session.coupleKey, newData);
+    
+    // Save to backend
+    await saveData(session.coupleKey, newData);
+    setSyncing(false);
   };
+
+  const handleRefresh = async () => {
+    if (!session) return;
+    setSyncing(true);
+    const data = await loadData(session.coupleKey);
+    setAppData(data);
+    setSyncing(false);
+  }
 
   if (loading) {
     return <div className="h-screen w-full flex items-center justify-center bg-slate-50"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-slate-900"></div></div>;
@@ -108,14 +146,14 @@ const App: React.FC = () => {
                   className={`p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all ${selectedRole === Role.GIRLFRIEND ? 'border-pink-500 bg-pink-50' : 'border-slate-100 hover:border-slate-200'}`}
                 >
                   <Heart className={`w-6 h-6 ${selectedRole === Role.GIRLFRIEND ? 'text-pink-500 fill-pink-500' : 'text-slate-400'}`} />
-                  <span className={`font-medium ${selectedRole === Role.GIRLFRIEND ? 'text-pink-700' : 'text-slate-600'}`}>I share availability</span>
+                  <span className={`font-medium ${selectedRole === Role.GIRLFRIEND ? 'text-pink-700' : 'text-slate-600'}`}>I share</span>
                 </button>
                 <button 
                    onClick={() => setSelectedRole(Role.BOYFRIEND)}
                    className={`p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all ${selectedRole === Role.BOYFRIEND ? 'border-blue-500 bg-blue-50' : 'border-slate-100 hover:border-slate-200'}`}
                 >
                   <Sparkles className={`w-6 h-6 ${selectedRole === Role.BOYFRIEND ? 'text-blue-500 fill-blue-500' : 'text-slate-400'}`} />
-                  <span className={`font-medium ${selectedRole === Role.BOYFRIEND ? 'text-blue-700' : 'text-slate-600'}`}>I plan surprises</span>
+                  <span className={`font-medium ${selectedRole === Role.BOYFRIEND ? 'text-blue-700' : 'text-slate-600'}`}>I plan</span>
                 </button>
               </div>
             </div>
@@ -132,7 +170,45 @@ const App: React.FC = () => {
                     className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent transition-all"
                  />
                </div>
-               <p className="text-xs text-slate-400 text-center mt-2">Use the same key on both devices.</p>
+            </div>
+
+            {/* Backend Configuration */}
+            <div className="border-t border-slate-100 pt-4">
+              <button 
+                onClick={() => setShowConfig(!showConfig)}
+                className="flex items-center gap-2 text-xs font-medium text-slate-500 hover:text-slate-800 transition-colors w-full"
+              >
+                <Cloud className="w-4 h-4" />
+                {showConfig ? 'Hide Cloud Settings' : 'Setup Cloud Sync (Supabase)'}
+              </button>
+              
+              {showConfig && (
+                <div className="mt-4 space-y-3 p-4 bg-slate-50 rounded-xl">
+                  <p className="text-[10px] text-slate-500 leading-relaxed">
+                    To sync between devices, create a free project at <a href="https://supabase.com" target="_blank" className="underline text-blue-600">supabase.com</a>.
+                  </p>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 uppercase mb-1">Project URL</label>
+                    <input 
+                      type="text" 
+                      value={sbUrl}
+                      onChange={(e) => setSbUrl(e.target.value)}
+                      placeholder="https://xyz.supabase.co"
+                      className="w-full px-3 py-2 text-xs rounded-lg border border-slate-200"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 uppercase mb-1">Anon Public Key</label>
+                    <input 
+                      type="password" 
+                      value={sbKey}
+                      onChange={(e) => setSbKey(e.target.value)}
+                      placeholder="eyJh..."
+                      className="w-full px-3 py-2 text-xs rounded-lg border border-slate-200"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             <Button 
@@ -167,13 +243,22 @@ const App: React.FC = () => {
           )}
           <span className="font-semibold text-slate-900 tracking-tight">{session.role === Role.GIRLFRIEND ? 'My Availability' : 'Planning Mode'}</span>
         </div>
-        <button 
-          onClick={handleLogout} 
-          className="p-2 -mr-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors"
-          aria-label="Logout"
-        >
-          <LogOut className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button 
+            onClick={handleRefresh} 
+            className={`p-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors ${syncing ? 'animate-spin text-blue-500' : ''}`}
+            aria-label="Refresh"
+          >
+            <RefreshCw className="w-5 h-5" />
+          </button>
+          <button 
+            onClick={handleLogout} 
+            className="p-2 -mr-2 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 transition-colors"
+            aria-label="Logout"
+          >
+            <LogOut className="w-5 h-5" />
+          </button>
+        </div>
       </header>
 
       {/* Main Content */}
@@ -204,7 +289,9 @@ const App: React.FC = () => {
 
         {/* Footer Text */}
         <div className="mt-8 text-center space-y-2">
-            <p className="text-xs text-slate-400">SyncHearts • Private & Encrypted</p>
+            <p className="text-xs text-slate-400 flex items-center justify-center gap-1">
+              SyncHearts • {getSupabaseConfig() ? 'Cloud Synced' : 'Offline Mode'}
+            </p>
             <div className="h-4 safe-bottom"></div>
         </div>
       </main>
@@ -245,8 +332,6 @@ const App: React.FC = () => {
           </button>
         </div>
       )}
-      
-      {/* Background overlay when Surprise Mode is active to dim distractions slightly (Optional, sticking to subtle CSS in cards for now) */}
     </div>
   );
 };

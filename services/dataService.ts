@@ -1,4 +1,5 @@
 import { AppState, DaySchedule, TimeBucket, AvailabilityStatus } from '../types';
+import { getClient } from './supabase';
 
 const STORAGE_KEY = 'synchearts_data_v1';
 const SESSION_KEY = 'synchearts_session_v1';
@@ -20,14 +21,56 @@ export const clearSession = () => {
   localStorage.removeItem(SESSION_KEY);
 };
 
-export const loadData = (coupleKey: string): AppState => {
+// --- DATA FETCHING (Async) ---
+
+export const loadData = async (coupleKey: string): Promise<AppState> => {
+  const supabase = getClient();
+  
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('schedules')
+        .select('data')
+        .eq('couple_key', coupleKey)
+        .single();
+
+      if (error && error.code !== 'PGRST116') { // PGRST116 is "No rows found", which is fine
+        console.error("Supabase load error:", error);
+      }
+
+      if (data && data.data) {
+        // Cache it locally too
+        localStorage.setItem(`${STORAGE_KEY}_${coupleKey}`, JSON.stringify(data.data));
+        return data.data as AppState;
+      }
+    } catch (e) {
+      console.error("Failed to load from Supabase", e);
+    }
+  }
+
+  // Fallback to LocalStorage
   const raw = localStorage.getItem(`${STORAGE_KEY}_${coupleKey}`);
   if (!raw) return getInitialState();
   return JSON.parse(raw);
 };
 
-export const saveData = (coupleKey: string, data: AppState) => {
+export const saveData = async (coupleKey: string, data: AppState) => {
+  // 1. Save Locally
   localStorage.setItem(`${STORAGE_KEY}_${coupleKey}`, JSON.stringify(data));
+
+  // 2. Save to Cloud if configured
+  const supabase = getClient();
+  if (supabase) {
+    try {
+      const { error } = await supabase
+        .from('schedules')
+        .upsert({ couple_key: coupleKey, data: data }, { onConflict: 'couple_key' });
+      
+      if (error) console.error("Supabase save error:", error);
+    } catch (e) {
+      console.error("Failed to save to Supabase", e);
+    }
+  }
 };
 
 // Helper to generate next 7 days keys
